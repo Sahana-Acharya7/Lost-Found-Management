@@ -1,9 +1,11 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from functools import wraps
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta
+import os
 
 # Create Flask app FIRST
 app = Flask(__name__)
@@ -15,6 +17,17 @@ app.config['SESSION_COOKIE_SECURE'] = False  # Set to True if using HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
+# Image Upload Configuration
+UPLOAD_FOLDER = 'static/uploads/items'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+
+# Create upload directory if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 # PostgreSQL Database Configuration
 DB_CONFIG = {
     'host': 'localhost',
@@ -23,6 +36,10 @@ DB_CONFIG = {
     'password': 'postgres123',
     'port': 5432
 }
+
+def allowed_file(filename):
+    """Check if file extension is allowed"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_db():
     """Create database connection"""
@@ -48,7 +65,7 @@ def init_db():
     ''')
     print("✓ User table created")
     
-    # Item table
+    # Item table with image_path column
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS item (
             item_id SERIAL PRIMARY KEY,
@@ -57,10 +74,22 @@ def init_db():
             category VARCHAR(100) NOT NULL,
             location VARCHAR(255) NOT NULL,
             date DATE NOT NULL,
-            status VARCHAR(20) DEFAULT 'active' CHECK(status IN ('active', 'resolved', 'archived'))
+            status VARCHAR(20) DEFAULT 'active' CHECK(status IN ('active', 'resolved', 'archived')),
+            image_path VARCHAR(255)
         )
     ''')
     print("✓ Item table created")
+    
+    # Check if image_path column exists, if not add it
+    cursor.execute("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'item' AND column_name = 'image_path'
+    """)
+    if not cursor.fetchone():
+        print("Adding image_path column to item table...")
+        cursor.execute('ALTER TABLE item ADD COLUMN image_path VARCHAR(255)')
+        print("✓ image_path column added")
     
     # Report table
     cursor.execute('''
@@ -88,7 +117,7 @@ def init_db():
     ''')
     print("✓ Claim_request table created")
     
-    # Security_question table - CORRECTED VERSION
+    # Security_question table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS security_question (
             question_id SERIAL PRIMARY KEY,
@@ -202,7 +231,7 @@ def user_signup():
             conn.close()
     
     return render_template('user_signup.html')
-# For user login, find this code:
+
 @app.route('/user/login', methods=['GET', 'POST'])
 def user_login():
     if request.method == 'POST':
@@ -221,7 +250,7 @@ def user_login():
         conn.close()
         
         if user and check_password_hash(user['password_hash'], password):
-            session.permanent = True  # <-- ADD THIS LINE
+            session.permanent = True
             session['user_id'] = user['user_id']
             session['name'] = user['name']
             session['email'] = user['email']
@@ -246,7 +275,7 @@ def user_dashboard():
     
     # Get user's reports
     cursor.execute('''
-        SELECT r.*, i.title, i.category, i.status 
+        SELECT r.*, i.title, i.category, i.status, i.image_path
         FROM report r
         JOIN item i ON r.item_id = i.item_id
         WHERE r.user_id = %s
@@ -256,7 +285,7 @@ def user_dashboard():
     
     # Get user's claims
     cursor.execute('''
-        SELECT c.*, i.title, i.category, i.status
+        SELECT c.*, i.title, i.category, i.status, i.image_path
         FROM claim_request c
         JOIN item i ON c.item_id = i.item_id
         WHERE c.user_id = %s
@@ -278,7 +307,7 @@ def user_logout():
 # ============================================
 # ADMIN ROUTES
 # ============================================
-# For admin login, find this code:
+
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
     if request.method == 'POST':
@@ -297,7 +326,7 @@ def admin_login():
         conn.close()
         
         if admin and check_password_hash(admin['password_hash'], password):
-            session.permanent = True  # <-- ADD THIS LINE
+            session.permanent = True
             session['user_id'] = admin['user_id']
             session['name'] = admin['name']
             session['email'] = admin['email']
@@ -310,8 +339,6 @@ def admin_login():
     
     return render_template('admin_login.html')
 
-
-# Optional: Add a keep-alive endpoint to refresh sessions
 @app.route('/api/keep-alive')
 def keep_alive():
     """Endpoint to keep session alive"""
@@ -341,7 +368,7 @@ def admin_dashboard():
     
     # Get recent claims
     cursor.execute('''
-        SELECT c.*, i.title, i.category, u.name as user_name
+        SELECT c.*, i.title, i.category, i.image_path, u.name as user_name
         FROM claim_request c
         JOIN item i ON c.item_id = i.item_id
         JOIN "user" u ON c.user_id = u.user_id
@@ -365,7 +392,6 @@ def admin_logout():
     session.clear()
     flash('Admin logged out successfully.', 'success')
     return redirect(url_for('index'))
-# Replace your review_claim route with this version that has better error handling:
 
 @app.route('/admin/claims')
 @login_required(role='admin')
@@ -387,6 +413,7 @@ def admin_claims():
                 i.description,
                 i.location,
                 i.date,
+                i.image_path,
                 u.user_id,
                 u.name as user_name,
                 u.email as user_email
@@ -421,80 +448,44 @@ def review_claim(claim_id):
     conn = get_db()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     
+    # ===== ADD THIS DEBUG BLOCK =====
+    print(f"\n{'='*60}")
+    print(f"DEBUG: Reviewing claim_id = {claim_id}")
+    print(f"{'='*60}\n")
+    # ================================
+    
     if request.method == 'POST':
         action_type = request.form.get('action_type')
         remarks = request.form.get('remarks', '')
-        
-        print(f"\n{'='*60}")
-        print(f"DEBUG: Processing claim #{claim_id}")
-        print(f"Action type: {action_type}")
-        print(f"Remarks: {remarks}")
-        print(f"Admin ID: {session.get('user_id')}")
-        print(f"{'='*60}\n")
         
         try:
             # Update claim status
             new_status = 'approved' if action_type == 'approve' else 'rejected'
             
-            print(f"Step 1: Updating claim status to '{new_status}'...")
             cursor.execute(
                 "UPDATE claim_request SET status = %s WHERE claim_id = %s",
                 (new_status, claim_id)
             )
-            print(f"✓ Claim status updated")
             
-            # Insert into admin_action table with EXPLICIT column order
-            print(f"Step 2: Inserting into admin_action table...")
-            
-            # First, let's verify the columns exist
-            cursor.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'admin_action' 
-                ORDER BY ordinal_position
-            """)
-            columns = cursor.fetchall()
-            print(f"Available columns in admin_action: {[c['column_name'] for c in columns]}")
-            
-            # Now insert with explicit values
-            insert_query = """
-                INSERT INTO admin_action (action_type, remarks, timestamp, admin_id, claim_id) 
-                VALUES (%s, %s, CURRENT_TIMESTAMP, %s, %s)
-                RETURNING action_id
-            """
-            
+            # Insert into admin_action table
             cursor.execute(
-                insert_query,
+                """INSERT INTO admin_action (action_type, remarks, timestamp, admin_id, claim_id) 
+                   VALUES (%s, %s, CURRENT_TIMESTAMP, %s, %s)""",
                 (action_type, remarks, session.get('user_id'), claim_id)
             )
             
-            new_action_id = cursor.fetchone()
-            print(f"✓ Admin action inserted with ID: {new_action_id}")
-            
             # Update item status if approved
             if action_type == 'approve':
-                print(f"Step 3: Updating item status to 'resolved'...")
                 cursor.execute('SELECT item_id FROM claim_request WHERE claim_id = %s', (claim_id,))
                 item_result = cursor.fetchone()
                 if item_result:
                     cursor.execute('UPDATE item SET status = %s WHERE item_id = %s', ('resolved', item_result['item_id']))
-                    print(f"✓ Item status updated")
             
             conn.commit()
-            print(f"\n✓✓✓ ALL CHANGES COMMITTED TO DATABASE ✓✓✓\n")
-            
             flash(f'Claim has been {new_status} successfully!', 'success')
             
         except Exception as e:
             conn.rollback()
-            print(f"\n✗✗✗ ERROR OCCURRED ✗✗✗")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {str(e)}")
-            print(f"Full error details:")
-            import traceback
-            traceback.print_exc()
-            print(f"✗✗✗ TRANSACTION ROLLED BACK ✗✗✗\n")
-            
             flash(f'Error processing claim: {str(e)}', 'danger')
         
         finally:
@@ -508,7 +499,7 @@ def review_claim(claim_id):
         cursor.execute('''
             SELECT 
                 cr.*,
-                i.title, i.category, i.description, i.location, i.date,
+                i.title, i.category, i.description, i.location, i.date, i.image_path,
                 u.name as user_name, u.email as user_email
             FROM claim_request cr
             JOIN item i ON cr.item_id = i.item_id
@@ -517,6 +508,19 @@ def review_claim(claim_id):
         ''', (claim_id,))
         
         claim = cursor.fetchone()
+        
+        # ===== ADD THIS DEBUG BLOCK =====
+        print(f"Query executed for claim_id: {claim_id}")
+        if claim:
+            print(f"✓ Found claim: #{claim['claim_id']}")
+            print(f"  Item ID: {claim['item_id']}")
+            print(f"  Item Title: {claim['title']}")
+            print(f"  Description: {claim['description'][:50]}...")
+            print(f"  User: {claim['user_name']}")
+        else:
+            print(f"✗ NO CLAIM FOUND for claim_id: {claim_id}")
+        print(f"{'='*60}\n")
+        # ================================
         
         if not claim:
             flash('Claim not found', 'danger')
@@ -534,37 +538,6 @@ def review_claim(claim_id):
         flash(f'Error loading claim: {str(e)}', 'danger')
         return redirect(url_for('admin_claims'))
 
-
-# Also add this test route to manually insert a record:
-@app.route('/admin/test-insert')
-@login_required(role='admin')
-def test_insert():
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    try:
-        print("Testing manual insert...")
-        cursor.execute("""
-            INSERT INTO admin_action (action_type, remarks, timestamp, admin_id, claim_id)
-            VALUES ('approve', 'Test insert', CURRENT_TIMESTAMP, %s, 2)
-            RETURNING action_id
-        """, (session.get('user_id'),))
-        
-        result = cursor.fetchone()
-        conn.commit()
-        
-        cursor.close()
-        conn.close()
-        
-        return f"<h1>Success!</h1><p>Inserted action_id: {result[0]}</p><p><a href='/admin/actions'>View Actions</a></p>"
-        
-    except Exception as e:
-        conn.rollback()
-        cursor.close()
-        conn.close()
-        
-        import traceback
-        return f"<h1>Error!</h1><pre>{traceback.format_exc()}</pre>"
 # ============================================
 # REPORT ROUTES
 # ============================================
@@ -591,13 +564,34 @@ def create_report():
             flash('Security question and answer are required.', 'error')
             return redirect(url_for('create_report'))
         
+        # Handle image upload
+        image_filename = None
+        if 'item_image' in request.files:
+            file = request.files['item_image']
+            
+            # Check if file was actually selected
+            if file and file.filename != '':
+                if allowed_file(file.filename):
+                    # Create secure filename with timestamp to avoid conflicts
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    original_filename = secure_filename(file.filename)
+                    filename = f"{timestamp}_{original_filename}"
+                    
+                    # Save file
+                    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                    file.save(filepath)
+                    image_filename = filename
+                else:
+                    flash('Invalid file type. Please upload JPG, PNG, or GIF images only.', 'error')
+                    return redirect(url_for('create_report'))
+        
         conn = get_db()
         cursor = conn.cursor()
         try:
-            # Create item first
+            # Create item first with image path
             cursor.execute(
-                'INSERT INTO item (title, description, category, location, date, status) VALUES (%s, %s, %s, %s, %s, %s) RETURNING item_id',
-                (title, description, category, location, date, 'active')
+                'INSERT INTO item (title, description, category, location, date, status, image_path) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING item_id',
+                (title, description, category, location, date, 'active', image_filename)
             )
             item_id = cursor.fetchone()[0]
             
@@ -619,6 +613,12 @@ def create_report():
             return redirect(url_for('user_dashboard'))
         except Exception as e:
             conn.rollback()
+            # Delete uploaded image if database operation fails
+            if image_filename:
+                try:
+                    os.remove(os.path.join(app.config['UPLOAD_FOLDER'], image_filename))
+                except:
+                    pass
             flash(f'Error creating report: {str(e)}', 'error')
             return redirect(url_for('create_report'))
         finally:
@@ -627,7 +627,6 @@ def create_report():
     
     return render_template('create_report.html')
 
-# ADDED: Missing view_items route
 @app.route('/user/items')
 @login_required(role='user')
 def view_items():
@@ -737,7 +736,7 @@ def my_claims():
     conn = get_db()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute('''
-        SELECT c.*, i.title, i.category, i.description
+        SELECT c.*, i.title, i.category, i.description, i.image_path
         FROM claim_request c
         JOIN item i ON c.item_id = i.item_id
         WHERE c.user_id = %s
@@ -747,8 +746,7 @@ def my_claims():
     cursor.close()
     conn.close()
     
-    return render_template('admin_claims.html', claims=claims)
-# ===== CLAIM REVIEW PAGE ROUTE =====
+    return render_template('my_claims.html', claims=claims)
 
 @app.route('/admin/reports')
 @login_required(role='admin')
@@ -756,7 +754,7 @@ def admin_reports():
     conn = get_db()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute('''
-        SELECT r.*, i.title, i.category, i.status, u.name as user_name
+        SELECT r.*, i.title, i.category, i.status, i.image_path, u.name as user_name
         FROM report r
         JOIN item i ON r.item_id = i.item_id
         JOIN "user" u ON r.user_id = u.user_id
@@ -768,7 +766,6 @@ def admin_reports():
     
     return render_template('admin_reports.html', reports=reports)
 
-# ===== ADMIN ACTIONS PAGE ROUTE (FIXED) =====
 @app.route('/admin/actions')
 @login_required(role='admin')
 def admin_actions():
@@ -776,7 +773,6 @@ def admin_actions():
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     
     try:
-        # Use LEFT JOIN to handle missing data gracefully
         cursor.execute('''
             SELECT 
                 aa.action_id,
@@ -788,6 +784,7 @@ def admin_actions():
                 u.email as admin_email,
                 i.title as item_title,
                 i.category as item_category,
+                i.image_path,
                 c.status as claim_status,
                 claimant.name as claimant_name,
                 claimant.email as claimant_email
@@ -800,9 +797,6 @@ def admin_actions():
         ''')
         
         actions = cursor.fetchall()
-        
-        print(f"✓ Found {len(actions)} admin actions")
-        
         cursor.close()
         conn.close()
         
@@ -814,111 +808,6 @@ def admin_actions():
         conn.close()
         flash(f'Error loading actions: {str(e)}', 'danger')
         return render_template('admin_actions.html', actions=[])
-
-
-# ===== DEBUG ROUTE - Check if actions are being saved =====
-@app.route('/admin/debug/actions')
-@login_required(role='admin')
-def debug_actions():
-    conn = get_db()
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    
-    output = "<h1>Admin Action Debug Info</h1>"
-    
-    # Check table structure
-    cursor.execute("""
-        SELECT column_name, data_type, is_nullable
-        FROM information_schema.columns 
-        WHERE table_name = 'admin_action'
-        ORDER BY ordinal_position
-    """)
-    
-    columns = cursor.fetchall()
-    output += "<h2>Table Structure:</h2><ul>"
-    for col in columns:
-        output += f"<li><strong>{col['column_name']}</strong>: {col['data_type']} (Nullable: {col['is_nullable']})</li>"
-    output += "</ul>"
-    
-    # Check all records
-    cursor.execute("SELECT * FROM admin_action ORDER BY timestamp DESC")
-    records = cursor.fetchall()
-    
-    output += f"<h2>Total Records: {len(records)}</h2>"
-    
-    if records:
-        output += "<table border='1' cellpadding='5'><tr>"
-        for key in records[0].keys():
-            output += f"<th>{key}</th>"
-        output += "</tr>"
-        
-        for record in records:
-            output += "<tr>"
-            for value in record.values():
-                output += f"<td>{value}</td>"
-            output += "</tr>"
-        output += "</table>"
-    else:
-        output += "<p style='color:red;'>⚠️ No records found in admin_action table!</p>"
-    
-    # Check claim_request table
-    cursor.execute("SELECT claim_id, status FROM claim_request")
-    claims = cursor.fetchall()
-    
-    output += "<h2>Claim Status:</h2><ul>"
-    for claim in claims:
-        output += f"<li>Claim #{claim['claim_id']}: <strong>{claim['status']}</strong></li>"
-    output += "</ul>"
-    
-    cursor.close()
-    conn.close()
-    
-    return output
-
-
-# ===== CHECK IF TABLE EXISTS, CREATE IF NOT =====
-def init_admin_action_table():
-    """Call this during app initialization"""
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    try:
-        # Check if table exists
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_name = 'admin_action'
-            )
-        """)
-        
-        exists = cursor.fetchone()[0]
-        
-        if not exists:
-            print("⚠️ admin_action table doesn't exist. Creating it...")
-            
-            cursor.execute("""
-                CREATE TABLE admin_action (
-                    action_id SERIAL PRIMARY KEY,
-                    claim_id INTEGER REFERENCES claim_request(claim_id),
-                    admin_id INTEGER REFERENCES "user"(user_id),
-                    action_type VARCHAR(20) NOT NULL,
-                    remarks TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            conn.commit()
-            print("✓ admin_action table created successfully!")
-        else:
-            print("✓ admin_action table already exists")
-        
-        cursor.close()
-        conn.close()
-        
-    except Exception as e:
-        print(f"✗ Error checking/creating admin_action table: {str(e)}")
-        cursor.close()
-        conn.close()
-
 
 @app.route('/api/get-security-answers/<int:claim_id>')
 @login_required(role='admin')
@@ -966,6 +855,50 @@ def get_security_answers(claim_id):
         cursor.close()
         conn.close()
 
+# Route to serve uploaded images
+@app.route('/uploads/items/<filename>')
+def uploaded_file(filename):
+    """Serve uploaded item images"""
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+
+@app.route('/debug/claim/<int:claim_id>')
+@login_required(role='admin')
+def debug_single_claim(claim_id):
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    cursor.execute('''
+        SELECT 
+            cr.claim_id,
+            cr.item_id,
+            cr.proof,
+            cr.status,
+            i.title,
+            i.description,
+            u.name as user_name
+        FROM claim_request cr
+        JOIN item i ON cr.item_id = i.item_id
+        JOIN "user" u ON cr.user_id = u.user_id
+        WHERE cr.claim_id = %s
+    ''', (claim_id,))
+    
+    claim = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    if claim:
+        return f"""
+        <h1>Debug Claim #{claim_id}</h1>
+        <p><strong>Claim ID:</strong> {claim['claim_id']}</p>
+        <p><strong>Item ID:</strong> {claim['item_id']}</p>
+        <p><strong>Title:</strong> {claim['title']}</p>
+        <p><strong>Description:</strong> {claim['description']}</p>
+        <p><strong>User:</strong> {claim['user_name']}</p>
+        <p><strong>Status:</strong> {claim['status']}</p>
+        """
+    else:
+        return f"<h1>No claim found with ID {claim_id}</h1>"
 if __name__ == '__main__':
     init_db()
     app.run(debug=True)

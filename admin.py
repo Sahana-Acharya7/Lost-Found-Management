@@ -35,7 +35,7 @@ if admins:
         print(f"Password 'admin123' valid: {is_valid}")
         print("-" * 60)
 else:
-    print("❌ No admin accounts found!")
+    print(" No admin accounts found!")
     print("\nCreating admin account now...")
     from werkzeug.security import generate_password_hash
     

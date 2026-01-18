@@ -17,63 +17,56 @@
             min-height: 100vh;
             padding: 20px;
         }
-/* Navbar wrapper */
-.navbar {
-    background: #ffffff;
-    padding: 15px 0;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 1000;
-}
 
-/* Inner container */
-.nav-container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 20px;
+        .navbar {
+            background: #ffffff;
+            padding: 15px 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+        }
 
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-}
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+        }
 
-/* Brand */
-.nav-brand {
-    font-size: 20px;
-    font-weight: 700;
-    color: #6366f1;
-    text-decoration: none;
-    margin-bottom: 10px;
-}
+        .nav-brand {
+            font-size: 20px;
+            font-weight: 700;
+            color: #6366f1;
+            text-decoration: none;
+            margin-bottom: 10px;
+        }
 
-/* Menu wrapper */
-.nav-menu {
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-}
+        .nav-menu {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
 
-/* Nav links */
-.nav-link {
-    color: #6b7280;
-    text-decoration: none;
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-weight: 500;
-    transition: background 0.25s ease, color 0.25s ease;
-}
+        .nav-link {
+            color: #6b7280;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: background 0.25s ease, color 0.25s ease;
+        }
 
-/* Hover + active */
-.nav-link:hover,
-.nav-link.active {
-    background: #6366f1;
-    color: #ffffff;
-}
-
+        .nav-link:hover,
+        .nav-link.active {
+            background: #6366f1;
+            color: #ffffff;
+        }
 
         .main-content {
             margin-top: 100px;
@@ -226,18 +219,6 @@
             font-size: 14px;
         }
 
-        .alert {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-
-        .alert-info {
-            background: #e0f2fe;
-            color: #075985;
-            border-left: 4px solid #0284c7;
-        }
-
         .btn-group {
             display: flex;
             gap: 15px;
@@ -332,6 +313,15 @@
             resize: vertical;
         }
 
+        .item-image {
+            width: 100%;
+            max-width: 300px;
+            height: auto;
+            border-radius: 8px;
+            margin-top: 10px;
+            border: 1px solid #e5e7eb;
+        }
+
         @media (max-width: 768px) {
             .header {
                 flex-direction: column;
@@ -368,8 +358,8 @@
     <div class="container">
         <div class="main-content">
             <div class="header">
-                <h1>Review Claim Request #2</h1>
-                <span class="badge badge-pending">STATUS: PENDING</span>
+                <h1>Review Claim Request #{{ claim.claim_id }}</h1>
+                <span class="badge badge-{{ claim.status }}">STATUS: {{ claim.status|upper }}</span>
             </div>
 
             <!-- Claimant Information -->
@@ -378,15 +368,15 @@
                 <div class="grid-3">
                     <div class="field">
                         <label>Name:</label>
-                        <p>sahana</p>
+                        <p>{{ claim.user_name }}</p>
                     </div>
                     <div class="field">
                         <label>Email:</label>
-                        <p>sahanasaanu349@gmail.com</p>
+                        <p>{{ claim.user_email }}</p>
                     </div>
                     <div class="field">
                         <label>Claim Date:</label>
-                        <p>2026-01-17 22:11:45.083017</p>
+                        <p>{{ claim.claim_date }}</p>
                     </div>
                 </div>
             </div>
@@ -394,26 +384,37 @@
             <!-- Item Details -->
             <div class="card">
                 <h2>Item Details</h2>
+                
+                <!-- Item Image if available -->
+                {% if claim.image_path %}
+                <div class="field">
+                    <label>Item Image:</label>
+                    <img src="{{ url_for('static', filename='uploads/items/' + claim.image_path) }}" 
+                         alt="{{ claim.title }}" 
+                         class="item-image">
+                </div>
+                {% endif %}
+                
                 <div class="grid-2">
                     <div class="field">
                         <label>Title:</label>
-                        <p>pen</p>
+                        <p>{{ claim.title }}</p>
                     </div>
                     <div class="field">
                         <label>Category:</label>
-                        <p>Other</p>
+                        <p>{{ claim.category }}</p>
                     </div>
                     <div class="field">
                         <label>Description:</label>
-                        <p>blue gel pen</p>
+                        <p>{{ claim.description }}</p>
                     </div>
                     <div class="field">
                         <label>Location:</label>
-                        <p>civil block</p>
+                        <p>{{ claim.location }}</p>
                     </div>
                     <div class="field">
                         <label>Date:</label>
-                        <p>2026-01-15</p>
+                        <p>{{ claim.date }}</p>
                     </div>
                 </div>
             </div>
@@ -421,40 +422,15 @@
             <!-- Proof of Ownership -->
             <div class="card">
                 <h2>Proof of Ownership</h2>
-                <p>has my name on it</p>
+                <p>{{ claim.proof }}</p>
             </div>
 
             <!-- Security Verification -->
             <div class="security-card">
                 <h2>🔒 Security Verification</h2>
                 
-                <div class="grid-2">
-                    <!-- Reporter's Answer -->
-                    <div class="answer-box reporter">
-                        <h3>Reporter's Question & Answer</h3>
-                        <div class="field">
-                            <label>Question:</label>
-                            <p class="answer-value">Whose name is on the pen?</p>
-                        </div>
-                        <div class="field">
-                            <label>Reporter's Answer:</label>
-                            <p class="answer-value">reynolds</p>
-                        </div>
-                    </div>
-
-                    <!-- Claimant's Answer -->
-                    <div class="answer-box claimant">
-                        <h3>Claimant's Answer</h3>
-                        <div class="field">
-                            <label>Claimant's Answer:</label>
-                            <p class="answer-value">reynolds</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="similarity-indicator" style="background: #d1fae5; color: #065f46; border: 2px solid #10b981;">
-                    <span style="font-size: 20px;">✓</span>
-                    <span>Answers match exactly</span>
+                <div class="grid-2" id="securityContainer">
+                    <p style="color: #666;">Loading security questions...</p>
                 </div>
 
                 <div class="info-box">
@@ -463,18 +439,20 @@
             </div>
 
             <!-- Action Buttons -->
-            <div class="btn-group">
-                <button type="button" class="btn btn-secondary" onclick="window.history.back()">
-                    ← Back to Claims
-                </button>
-                
-                <button type="button" class="btn btn-success" onclick="openActionModal('approve')">
-                    ✓ Approve Claim
-                </button>
-                <button type="button" class="btn btn-danger" onclick="openActionModal('reject')">
-                    ✗ Reject Claim
-                </button>
-            </div>
+           <div class="btn-group">
+    <a href="{{ url_for('admin_claims') }}" class="btn btn-secondary">
+        ← Back to Claims
+    </a>
+    
+    {% if claim.status == 'pending' %}
+    <button type="button" class="btn btn-success" onclick="openActionModal('approve')">
+        ✓ Approve Claim
+    </button>
+    <button type="button" class="btn btn-danger" onclick="openActionModal('reject')">
+        ✗ Reject Claim
+    </button>
+    {% endif %}
+</div>
         </div>
     </div>
 
@@ -496,43 +474,100 @@
         </div>
     </div>
 
-   <script>
-    function openActionModal(action) {
-        const modal = document.getElementById('actionModal');
-        const title = document.getElementById('modalTitle');
-        const actionInput = document.getElementById('action_type');
-        const confirmBtn = document.getElementById('confirmBtn');
-        
-        actionInput.value = action;
-        
-        if (action === 'approve') {
-            title.textContent = 'Approve This Claim?';
-            confirmBtn.textContent = 'Approve Claim';
-            confirmBtn.className = 'btn btn-success';
-            confirmBtn.style.flex = '1';
-        } else {
-            title.textContent = 'Reject This Claim?';
-            confirmBtn.textContent = 'Reject Claim';
-            confirmBtn.className = 'btn btn-danger';
-            confirmBtn.style.flex = '1';
-        }
-        
-        modal.style.display = 'block';
-    }
+    <script>
+        // Load security questions via API
+        fetch('/api/get-security-answers/{{ claim.claim_id }}')
+            .then(response => response.json())
+            .then(data => {
+                const container = document.getElementById('securityContainer');
+                
+                if (data.success) {
+                    const reporterAnswer = data.reporter_answer.toLowerCase().trim();
+                    const claimantAnswer = data.claimant_answer.toLowerCase().trim();
+                    const answersMatch = reporterAnswer === claimantAnswer;
+                    
+                    container.innerHTML = `
+                        <!-- Reporter's Answer -->
+                        <div class="answer-box reporter">
+                            <h3>Reporter's Question & Answer</h3>
+                            <div class="field">
+                                <label>Question:</label>
+                                <p class="answer-value">${data.reporter_question}</p>
+                            </div>
+                            <div class="field">
+                                <label>Reporter's Answer:</label>
+                                <p class="answer-value">${data.reporter_answer}</p>
+                            </div>
+                        </div>
 
-    function closeActionModal() {
-        const modal = document.getElementById('actionModal');
-        modal.style.display = 'none';
-        document.getElementById('remarks').value = '';
-    }
+                        <!-- Claimant's Answer -->
+                        <div class="answer-box claimant">
+                            <h3>Claimant's Answer</h3>
+                            <div class="field">
+                                <label>Claimant's Answer:</label>
+                                <p class="answer-value">${data.claimant_answer}</p>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Add similarity indicator after the grid
+                    const indicator = document.createElement('div');
+                    indicator.className = 'similarity-indicator';
+                    
+                    if (answersMatch) {
+                        indicator.style.cssText = 'background: #d1fae5; color: #065f46; border: 2px solid #10b981;';
+                        indicator.innerHTML = '<span style="font-size: 20px;">✓</span><span>Answers match exactly</span>';
+                    } else {
+                        indicator.style.cssText = 'background: #fef3c7; color: #92400e; border: 2px solid #f59e0b;';
+                        indicator.innerHTML = '<span style="font-size: 20px;">⚠</span><span>Answers do not match exactly - Review carefully</span>';
+                    }
+                    
+                    container.parentNode.insertBefore(indicator, container.nextSibling);
+                } else {
+                    container.innerHTML = '<p style="color: #dc2626;">Error loading security questions</p>';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('securityContainer').innerHTML = '<p style="color: #dc2626;">Error loading security questions</p>';
+            });
 
-    // Close modal when clicking outside
-    window.onclick = function(event) {
-        const modal = document.getElementById('actionModal');
-        if (event.target === modal) {
-            closeActionModal();
+        function openActionModal(action) {
+            const modal = document.getElementById('actionModal');
+            const title = document.getElementById('modalTitle');
+            const actionInput = document.getElementById('action_type');
+            const confirmBtn = document.getElementById('confirmBtn');
+            
+            actionInput.value = action;
+            
+            if (action === 'approve') {
+                title.textContent = 'Approve This Claim?';
+                confirmBtn.textContent = 'Approve Claim';
+                confirmBtn.className = 'btn btn-success';
+                confirmBtn.style.flex = '1';
+            } else {
+                title.textContent = 'Reject This Claim?';
+                confirmBtn.textContent = 'Reject Claim';
+                confirmBtn.className = 'btn btn-danger';
+                confirmBtn.style.flex = '1';
+            }
+            
+            modal.style.display = 'block';
         }
-    }
-</script>
+
+        function closeActionModal() {
+            const modal = document.getElementById('actionModal');
+            modal.style.display = 'none';
+            document.getElementById('remarks').value = '';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('actionModal');
+            if (event.target === modal) {
+                closeActionModal();
+            }
+        }
+    </script>
 </body>
 </html>

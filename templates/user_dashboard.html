@@ -61,6 +61,7 @@
                 <table class="data-table">
                     <thead>
                         <tr>
+                            <th>Image</th>
                             <th>Title</th>
                             <th>Category</th>
                             <th>Type</th>
@@ -71,6 +72,18 @@
                     <tbody>
                         {% for report in reports %}
                         <tr>
+                            <td>
+                                <!-- Image Thumbnail - ADDED HERE -->
+                                {% if report.image_path %}
+                                    <img src="{{ url_for('static', filename='uploads/items/' + report.image_path) }}" 
+                                         alt="{{ report.title }}"
+                                         class="table-thumbnail">
+                                {% else %}
+                                    <div class="table-thumbnail-placeholder">
+                                        📷
+                                    </div>
+                                {% endif %}
+                            </td>
                             <td>{{ report.title }}</td>
                             <td>{{ report.category }}</td>
                             <td><span class="badge badge-{{ report.report_type }}">{{ report.report_type }}</span></td>
@@ -107,5 +120,34 @@
             </div>
         </div>
     </div>
+
+    <style>
+        /* Thumbnail styles for table - ADDED */
+        .table-thumbnail {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+
+        .table-thumbnail-placeholder {
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f0f0f0;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            font-size: 1.5rem;
+            color: #999;
+        }
+
+        /* Ensure table cells are vertically aligned */
+        .data-table tbody td {
+            vertical-align: middle;
+        }
+    </style>
 </body>
 </html>
