@@ -1,0 +1,971 @@
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
+import psycopg2
+import psycopg2.extras
+from datetime import datetime, timedelta
+
+# Create Flask app FIRST
+app = Flask(__name__)
+app.secret_key = 'abd04a92802df48bf455d9eb4c6e3186325671c5fd9c59c1df56e31e8eb98088'
+
+# THEN configure it
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)  # Session lasts 24 hours
+app.config['SESSION_COOKIE_SECURE'] = False  # Set to True if using HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# PostgreSQL Database Configuration
+DB_CONFIG = {
+    'host': 'localhost',
+    'database': 'lost_found_db',
+    'user': 'postgres',
+    'password': 'postgres123',
+    'port': 5432
+}
+
+def get_db():
+    """Create database connection"""
+    conn = psycopg2.connect(**DB_CONFIG)
+    return conn
+
+def init_db():
+    """Initialize database tables"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    print("Creating PostgreSQL tables...")
+    
+    # User table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS "user" (
+            user_id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            password_hash VARCHAR(255) NOT NULL,
+            role VARCHAR(10) NOT NULL CHECK(role IN ('user', 'admin'))
+        )
+    ''')
+    print("✓ User table created")
+    
+    # Item table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS item (
+            item_id SERIAL PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            description TEXT NOT NULL,
+            category VARCHAR(100) NOT NULL,
+            location VARCHAR(255) NOT NULL,
+            date DATE NOT NULL,
+            status VARCHAR(20) DEFAULT 'active' CHECK(status IN ('active', 'resolved', 'archived'))
+        )
+    ''')
+    print("✓ Item table created")
+    
+    # Report table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS report (
+            report_id SERIAL PRIMARY KEY,
+            report_type VARCHAR(10) NOT NULL CHECK(report_type IN ('lost', 'found')),
+            report_date TIMESTAMP NOT NULL,
+            remarks TEXT,
+            user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL REFERENCES item(item_id) ON DELETE CASCADE
+        )
+    ''')
+    print("✓ Report table created")
+    
+    # Claim_request table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS claim_request (
+            claim_id SERIAL PRIMARY KEY,
+            claim_date TIMESTAMP NOT NULL,
+            status VARCHAR(20) DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+            proof TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL REFERENCES item(item_id) ON DELETE CASCADE
+        )
+    ''')
+    print("✓ Claim_request table created")
+    
+    # Security_question table - CORRECTED VERSION
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS security_question (
+            question_id SERIAL PRIMARY KEY,
+            question_text TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            claim_id INTEGER REFERENCES claim_request(claim_id) ON DELETE CASCADE,
+            item_id INTEGER REFERENCES item(item_id) ON DELETE CASCADE
+        )
+    ''')
+    print("✓ Security_question table created")
+    
+    # Admin_action table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admin_action (
+            action_id SERIAL PRIMARY KEY,
+            action_type VARCHAR(20) NOT NULL CHECK(action_type IN ('approve', 'reject')),
+            remarks TEXT,
+            timestamp TIMESTAMP NOT NULL,
+            admin_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
+            claim_id INTEGER NOT NULL REFERENCES claim_request(claim_id) ON DELETE CASCADE
+        )
+    ''')
+    print("✓ Admin_action table created")
+    
+    # Create default admin account
+    cursor.execute('SELECT * FROM "user" WHERE email = %s', ('admin@admin.com',))
+    if not cursor.fetchone():
+        password_hash = generate_password_hash('admin123')
+        cursor.execute(
+            'INSERT INTO "user" (name, email, password_hash, role) VALUES (%s, %s, %s, %s)',
+            ('Admin', 'admin@admin.com', password_hash, 'admin')
+        )
+        print("✓ Admin account created (Email: admin@admin.com, Password: admin123)")
+    else:
+        print("✓ Admin account already exists")
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+    print("✓ All tables created successfully!")
+
+# Decorator for role-based access control
+def login_required(role=None):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if 'user_id' not in session:
+                flash('Please log in to access this page.', 'error')
+                return redirect(url_for('index'))
+            
+            if role and session.get('role') != role:
+                flash('Unauthorized access.', 'error')
+                return redirect(url_for('index'))
+            
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+# ============================================
+# PUBLIC ROUTES
+# ============================================
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# ============================================
+# USER ROUTES
+# ============================================
+
+@app.route('/user/signup', methods=['GET', 'POST'])
+def user_signup():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        email = request.form.get('email')
+        password = request.form.get('password')
+        
+        if not all([name, email, password]):
+            flash('All fields are required.', 'error')
+            return redirect(url_for('user_signup'))
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Check if email already exists
+        cursor.execute('SELECT user_id FROM "user" WHERE email = %s', (email,))
+        existing_user = cursor.fetchone()
+        
+        if existing_user:
+            flash('Email already registered. Please login.', 'error')
+            cursor.close()
+            conn.close()
+            return redirect(url_for('user_login'))
+        
+        # Create new user
+        password_hash = generate_password_hash(password)
+        try:
+            cursor.execute(
+                'INSERT INTO "user" (name, email, password_hash, role) VALUES (%s, %s, %s, %s)',
+                (name, email, password_hash, 'user')
+            )
+            conn.commit()
+            flash('Account created successfully! Please login.', 'success')
+            return redirect(url_for('user_login'))
+        except Exception as e:
+            conn.rollback()
+            flash(f'Error creating account: {str(e)}', 'error')
+            return redirect(url_for('user_signup'))
+        finally:
+            cursor.close()
+            conn.close()
+    
+    return render_template('user_signup.html')
+# For user login, find this code:
+@app.route('/user/login', methods=['GET', 'POST'])
+def user_login():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        
+        if not all([email, password]):
+            flash('Email and password are required.', 'error')
+            return redirect(url_for('user_login'))
+        
+        conn = get_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute('SELECT * FROM "user" WHERE email = %s AND role = %s', (email, 'user'))
+        user = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if user and check_password_hash(user['password_hash'], password):
+            session.permanent = True  # <-- ADD THIS LINE
+            session['user_id'] = user['user_id']
+            session['name'] = user['name']
+            session['email'] = user['email']
+            session['role'] = user['role']
+            flash(f'Welcome back, {user["name"]}!', 'success')
+            return redirect(url_for('user_dashboard'))
+        else:
+            flash('Invalid email or password.', 'error')
+            return redirect(url_for('user_login'))
+    
+    return render_template('user_login.html')
+
+@app.route('/user/dashboard')
+@login_required(role='user')
+def user_dashboard():
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    # Get user info
+    cursor.execute('SELECT * FROM "user" WHERE user_id = %s', (session['user_id'],))
+    user = cursor.fetchone()
+    
+    # Get user's reports
+    cursor.execute('''
+        SELECT r.*, i.title, i.category, i.status 
+        FROM report r
+        JOIN item i ON r.item_id = i.item_id
+        WHERE r.user_id = %s
+        ORDER BY r.report_date DESC
+    ''', (session['user_id'],))
+    reports = cursor.fetchall()
+    
+    # Get user's claims
+    cursor.execute('''
+        SELECT c.*, i.title, i.category, i.status
+        FROM claim_request c
+        JOIN item i ON c.item_id = i.item_id
+        WHERE c.user_id = %s
+        ORDER BY c.claim_date DESC
+    ''', (session['user_id'],))
+    claims = cursor.fetchall()
+    
+    cursor.close()
+    conn.close()
+    
+    return render_template('user_dashboard.html', user=user, reports=reports, claims=claims)
+
+@app.route('/user/logout')
+def user_logout():
+    session.clear()
+    flash('You have been logged out successfully.', 'success')
+    return redirect(url_for('index'))
+
+# ============================================
+# ADMIN ROUTES
+# ============================================
+# For admin login, find this code:
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        
+        if not all([email, password]):
+            flash('Email and password are required.', 'error')
+            return redirect(url_for('admin_login'))
+        
+        conn = get_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute('SELECT * FROM "user" WHERE email = %s AND role = %s', (email, 'admin'))
+        admin = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if admin and check_password_hash(admin['password_hash'], password):
+            session.permanent = True  # <-- ADD THIS LINE
+            session['user_id'] = admin['user_id']
+            session['name'] = admin['name']
+            session['email'] = admin['email']
+            session['role'] = admin['role']
+            flash(f'Welcome, Admin {admin["name"]}!', 'success')
+            return redirect(url_for('admin_dashboard'))
+        else:
+            flash('Invalid admin credentials.', 'error')
+            return redirect(url_for('admin_login'))
+    
+    return render_template('admin_login.html')
+
+
+# Optional: Add a keep-alive endpoint to refresh sessions
+@app.route('/api/keep-alive')
+def keep_alive():
+    """Endpoint to keep session alive"""
+    if 'user_id' in session:
+        return jsonify({'status': 'alive', 'user': session.get('name')})
+    return jsonify({'status': 'expired'}), 401
+
+@app.route('/admin/dashboard')
+@login_required(role='admin')
+def admin_dashboard():
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    # Get admin info
+    cursor.execute('SELECT * FROM "user" WHERE user_id = %s', (session['user_id'],))
+    admin = cursor.fetchone()
+    
+    # Get statistics
+    cursor.execute('SELECT COUNT(*) as count FROM report')
+    total_reports = cursor.fetchone()['count']
+    
+    cursor.execute('SELECT COUNT(*) as count FROM item')
+    total_items = cursor.fetchone()['count']
+    
+    cursor.execute('SELECT COUNT(*) as count FROM claim_request WHERE status = %s', ('pending',))
+    pending_claims = cursor.fetchone()['count']
+    
+    # Get recent claims
+    cursor.execute('''
+        SELECT c.*, i.title, i.category, u.name as user_name
+        FROM claim_request c
+        JOIN item i ON c.item_id = i.item_id
+        JOIN "user" u ON c.user_id = u.user_id
+        ORDER BY c.claim_date DESC
+        LIMIT 10
+    ''')
+    recent_claims = cursor.fetchall()
+    
+    cursor.close()
+    conn.close()
+    
+    return render_template('admin_dashboard.html',
+                         admin=admin,
+                         total_reports=total_reports,
+                         total_items=total_items,
+                         pending_claims=pending_claims,
+                         recent_claims=recent_claims)
+
+@app.route('/admin/logout')
+def admin_logout():
+    session.clear()
+    flash('Admin logged out successfully.', 'success')
+    return redirect(url_for('index'))
+# Replace your review_claim route with this version that has better error handling:
+
+@app.route('/admin/claims')
+@login_required(role='admin')
+def admin_claims():
+    """View all claim requests"""
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    try:
+        cursor.execute('''
+            SELECT 
+                c.claim_id,
+                c.claim_date,
+                c.status,
+                c.proof,
+                i.item_id,
+                i.title,
+                i.category,
+                i.description,
+                i.location,
+                i.date,
+                u.user_id,
+                u.name as user_name,
+                u.email as user_email
+            FROM claim_request c
+            JOIN item i ON c.item_id = i.item_id
+            JOIN "user" u ON c.user_id = u.user_id
+            ORDER BY 
+                CASE c.status 
+                    WHEN 'pending' THEN 1
+                    WHEN 'approved' THEN 2
+                    WHEN 'rejected' THEN 3
+                END,
+                c.claim_date DESC
+        ''')
+        
+        claims = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        return render_template('admin_claims.html', claims=claims)
+        
+    except Exception as e:
+        print(f"Error loading claims: {str(e)}")
+        cursor.close()
+        conn.close()
+        flash(f'Error loading claims: {str(e)}', 'danger')
+        return render_template('admin_claims.html', claims=[])
+
+@app.route('/admin/claims/<int:claim_id>/review', methods=['GET', 'POST'])
+@login_required(role='admin')
+def review_claim(claim_id):
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    if request.method == 'POST':
+        action_type = request.form.get('action_type')
+        remarks = request.form.get('remarks', '')
+        
+        print(f"\n{'='*60}")
+        print(f"DEBUG: Processing claim #{claim_id}")
+        print(f"Action type: {action_type}")
+        print(f"Remarks: {remarks}")
+        print(f"Admin ID: {session.get('user_id')}")
+        print(f"{'='*60}\n")
+        
+        try:
+            # Update claim status
+            new_status = 'approved' if action_type == 'approve' else 'rejected'
+            
+            print(f"Step 1: Updating claim status to '{new_status}'...")
+            cursor.execute(
+                "UPDATE claim_request SET status = %s WHERE claim_id = %s",
+                (new_status, claim_id)
+            )
+            print(f"✓ Claim status updated")
+            
+            # Insert into admin_action table with EXPLICIT column order
+            print(f"Step 2: Inserting into admin_action table...")
+            
+            # First, let's verify the columns exist
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'admin_action' 
+                ORDER BY ordinal_position
+            """)
+            columns = cursor.fetchall()
+            print(f"Available columns in admin_action: {[c['column_name'] for c in columns]}")
+            
+            # Now insert with explicit values
+            insert_query = """
+                INSERT INTO admin_action (action_type, remarks, timestamp, admin_id, claim_id) 
+                VALUES (%s, %s, CURRENT_TIMESTAMP, %s, %s)
+                RETURNING action_id
+            """
+            
+            cursor.execute(
+                insert_query,
+                (action_type, remarks, session.get('user_id'), claim_id)
+            )
+            
+            new_action_id = cursor.fetchone()
+            print(f"✓ Admin action inserted with ID: {new_action_id}")
+            
+            # Update item status if approved
+            if action_type == 'approve':
+                print(f"Step 3: Updating item status to 'resolved'...")
+                cursor.execute('SELECT item_id FROM claim_request WHERE claim_id = %s', (claim_id,))
+                item_result = cursor.fetchone()
+                if item_result:
+                    cursor.execute('UPDATE item SET status = %s WHERE item_id = %s', ('resolved', item_result['item_id']))
+                    print(f"✓ Item status updated")
+            
+            conn.commit()
+            print(f"\n✓✓✓ ALL CHANGES COMMITTED TO DATABASE ✓✓✓\n")
+            
+            flash(f'Claim has been {new_status} successfully!', 'success')
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"\n✗✗✗ ERROR OCCURRED ✗✗✗")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            print(f"Full error details:")
+            import traceback
+            traceback.print_exc()
+            print(f"✗✗✗ TRANSACTION ROLLED BACK ✗✗✗\n")
+            
+            flash(f'Error processing claim: {str(e)}', 'danger')
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        return redirect(url_for('admin_claims'))
+    
+    # GET request - show the review page
+    try:
+        cursor.execute('''
+            SELECT 
+                cr.*,
+                i.title, i.category, i.description, i.location, i.date,
+                u.name as user_name, u.email as user_email
+            FROM claim_request cr
+            JOIN item i ON cr.item_id = i.item_id
+            JOIN "user" u ON cr.user_id = u.user_id
+            WHERE cr.claim_id = %s
+        ''', (claim_id,))
+        
+        claim = cursor.fetchone()
+        
+        if not claim:
+            flash('Claim not found', 'danger')
+            return redirect(url_for('admin_claims'))
+        
+        cursor.close()
+        conn.close()
+        
+        return render_template('review_claim.html', claim=claim)
+        
+    except Exception as e:
+        print(f"Error loading claim: {str(e)}")
+        cursor.close()
+        conn.close()
+        flash(f'Error loading claim: {str(e)}', 'danger')
+        return redirect(url_for('admin_claims'))
+
+
+# Also add this test route to manually insert a record:
+@app.route('/admin/test-insert')
+@login_required(role='admin')
+def test_insert():
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        print("Testing manual insert...")
+        cursor.execute("""
+            INSERT INTO admin_action (action_type, remarks, timestamp, admin_id, claim_id)
+            VALUES ('approve', 'Test insert', CURRENT_TIMESTAMP, %s, 2)
+            RETURNING action_id
+        """, (session.get('user_id'),))
+        
+        result = cursor.fetchone()
+        conn.commit()
+        
+        cursor.close()
+        conn.close()
+        
+        return f"<h1>Success!</h1><p>Inserted action_id: {result[0]}</p><p><a href='/admin/actions'>View Actions</a></p>"
+        
+    except Exception as e:
+        conn.rollback()
+        cursor.close()
+        conn.close()
+        
+        import traceback
+        return f"<h1>Error!</h1><pre>{traceback.format_exc()}</pre>"
+# ============================================
+# REPORT ROUTES
+# ============================================
+
+@app.route('/user/create-report', methods=['GET', 'POST'])
+@login_required(role='user')
+def create_report():
+    if request.method == 'POST':
+        report_type = request.form.get('report_type')
+        title = request.form.get('title')
+        description = request.form.get('description')
+        category = request.form.get('category')
+        location = request.form.get('location')
+        date = request.form.get('date')
+        remarks = request.form.get('remarks')
+        security_question = request.form.get('security_question')
+        security_answer = request.form.get('security_answer')
+        
+        if not all([report_type, title, description, category, location, date]):
+            flash('All required fields must be filled.', 'error')
+            return redirect(url_for('create_report'))
+        
+        if not security_question or not security_answer:
+            flash('Security question and answer are required.', 'error')
+            return redirect(url_for('create_report'))
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        try:
+            # Create item first
+            cursor.execute(
+                'INSERT INTO item (title, description, category, location, date, status) VALUES (%s, %s, %s, %s, %s, %s) RETURNING item_id',
+                (title, description, category, location, date, 'active')
+            )
+            item_id = cursor.fetchone()[0]
+            
+            # Create report
+            cursor.execute(
+                'INSERT INTO report (report_type, report_date, remarks, user_id, item_id) VALUES (%s, %s, %s, %s, %s) RETURNING report_id',
+                (report_type, datetime.now(), remarks, session['user_id'], item_id)
+            )
+            report_id = cursor.fetchone()[0]
+            
+            # Store REPORTER's security question (claim_id = NULL, item_id set)
+            cursor.execute(
+                'INSERT INTO security_question (question_text, answer, claim_id, item_id) VALUES (%s, %s, %s, %s)',
+                (security_question, security_answer, None, item_id)
+            )
+            
+            conn.commit()
+            flash(f'{report_type.capitalize()} item reported successfully!', 'success')
+            return redirect(url_for('user_dashboard'))
+        except Exception as e:
+            conn.rollback()
+            flash(f'Error creating report: {str(e)}', 'error')
+            return redirect(url_for('create_report'))
+        finally:
+            cursor.close()
+            conn.close()
+    
+    return render_template('create_report.html')
+
+# ADDED: Missing view_items route
+@app.route('/user/items')
+@login_required(role='user')
+def view_items():
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute('''
+        SELECT i.*, r.report_type 
+        FROM item i
+        LEFT JOIN report r ON i.item_id = r.item_id
+        WHERE i.status = %s
+        ORDER BY i.date DESC
+    ''', ('active',))
+    items = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return render_template('view_items.html', items=items)
+
+# ============================================
+# CLAIM ROUTES
+# ============================================
+
+@app.route('/user/submit-claim/<int:item_id>', methods=['GET', 'POST'])
+@login_required(role='user')
+def submit_claim(item_id):
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    if request.method == 'POST':
+        proof = request.form.get('proof')
+        security_answer = request.form.get('security_answer')
+        
+        if not proof:
+            flash('Proof description is required.', 'error')
+            return redirect(url_for('submit_claim', item_id=item_id))
+        
+        if not security_answer:
+            flash('Security answer is required.', 'error')
+            return redirect(url_for('submit_claim', item_id=item_id))
+        
+        try:
+            # Check if user already has a pending claim
+            cursor.execute(
+                'SELECT * FROM claim_request WHERE user_id = %s AND item_id = %s AND status = %s',
+                (session['user_id'], item_id, 'pending')
+            )
+            existing_claim = cursor.fetchone()
+            
+            if existing_claim:
+                flash('You already have a pending claim for this item.', 'error')
+                return redirect(url_for('view_items'))
+            
+            # Create claim request
+            cursor.execute(
+                'INSERT INTO claim_request (claim_date, status, proof, user_id, item_id) VALUES (%s, %s, %s, %s, %s) RETURNING claim_id',
+                (datetime.now(), 'pending', proof, session['user_id'], item_id)
+            )
+            claim_id = cursor.fetchone()['claim_id']
+            
+            # Get the reporter's security question
+            cursor.execute(
+                'SELECT question_text FROM security_question WHERE item_id = %s AND claim_id IS NULL LIMIT 1',
+                (item_id,)
+            )
+            question = cursor.fetchone()
+            
+            # Store CLAIMANT's answer
+            cursor.execute(
+                'INSERT INTO security_question (question_text, answer, claim_id, item_id) VALUES (%s, %s, %s, %s)',
+                (question['question_text'] if question else 'Security verification', security_answer, claim_id, item_id)
+            )
+            
+            conn.commit()
+            flash('Claim request submitted successfully!', 'success')
+            return redirect(url_for('user_dashboard'))
+        except Exception as e:
+            conn.rollback()
+            flash(f'Error submitting claim: {str(e)}', 'error')
+        finally:
+            cursor.close()
+            conn.close()
+            return redirect(url_for('submit_claim', item_id=item_id))
+    
+    # GET request - fetch item and security question
+    cursor.execute('SELECT i.*, r.report_type FROM item i LEFT JOIN report r ON i.item_id = r.item_id WHERE i.item_id = %s', (item_id,))
+    item = cursor.fetchone()
+    
+    # Get REPORTER's security question
+    cursor.execute(
+        'SELECT question_text FROM security_question WHERE item_id = %s AND claim_id IS NULL LIMIT 1',
+        (item_id,)
+    )
+    security_question = cursor.fetchone()
+    
+    cursor.close()
+    conn.close()
+    
+    if not item:
+        flash('Item not found.', 'error')
+        return redirect(url_for('view_items'))
+    
+    return render_template('claim_form.html', item=item, security_question=security_question)
+
+@app.route('/user/my-claims')
+@login_required(role='user')
+def my_claims():
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute('''
+        SELECT c.*, i.title, i.category, i.description
+        FROM claim_request c
+        JOIN item i ON c.item_id = i.item_id
+        WHERE c.user_id = %s
+        ORDER BY c.claim_date DESC
+    ''', (session['user_id'],))
+    claims = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return render_template('admin_claims.html', claims=claims)
+# ===== CLAIM REVIEW PAGE ROUTE =====
+
+@app.route('/admin/reports')
+@login_required(role='admin')
+def admin_reports():
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute('''
+        SELECT r.*, i.title, i.category, i.status, u.name as user_name
+        FROM report r
+        JOIN item i ON r.item_id = i.item_id
+        JOIN "user" u ON r.user_id = u.user_id
+        ORDER BY r.report_date DESC
+    ''')
+    reports = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return render_template('admin_reports.html', reports=reports)
+
+# ===== ADMIN ACTIONS PAGE ROUTE (FIXED) =====
+@app.route('/admin/actions')
+@login_required(role='admin')
+def admin_actions():
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    try:
+        # Use LEFT JOIN to handle missing data gracefully
+        cursor.execute('''
+            SELECT 
+                aa.action_id,
+                aa.claim_id,
+                aa.action_type,
+                aa.remarks,
+                aa.timestamp,
+                u.name as admin_name,
+                u.email as admin_email,
+                i.title as item_title,
+                i.category as item_category,
+                c.status as claim_status,
+                claimant.name as claimant_name,
+                claimant.email as claimant_email
+            FROM admin_action aa
+            LEFT JOIN "user" u ON aa.admin_id = u.user_id
+            LEFT JOIN claim_request c ON aa.claim_id = c.claim_id
+            LEFT JOIN item i ON c.item_id = i.item_id
+            LEFT JOIN "user" claimant ON c.user_id = claimant.user_id
+            ORDER BY aa.timestamp DESC
+        ''')
+        
+        actions = cursor.fetchall()
+        
+        print(f"✓ Found {len(actions)} admin actions")
+        
+        cursor.close()
+        conn.close()
+        
+        return render_template('admin_actions.html', actions=actions)
+        
+    except Exception as e:
+        print(f"✗ Error in admin_actions: {str(e)}")
+        cursor.close()
+        conn.close()
+        flash(f'Error loading actions: {str(e)}', 'danger')
+        return render_template('admin_actions.html', actions=[])
+
+
+# ===== DEBUG ROUTE - Check if actions are being saved =====
+@app.route('/admin/debug/actions')
+@login_required(role='admin')
+def debug_actions():
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    output = "<h1>Admin Action Debug Info</h1>"
+    
+    # Check table structure
+    cursor.execute("""
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns 
+        WHERE table_name = 'admin_action'
+        ORDER BY ordinal_position
+    """)
+    
+    columns = cursor.fetchall()
+    output += "<h2>Table Structure:</h2><ul>"
+    for col in columns:
+        output += f"<li><strong>{col['column_name']}</strong>: {col['data_type']} (Nullable: {col['is_nullable']})</li>"
+    output += "</ul>"
+    
+    # Check all records
+    cursor.execute("SELECT * FROM admin_action ORDER BY timestamp DESC")
+    records = cursor.fetchall()
+    
+    output += f"<h2>Total Records: {len(records)}</h2>"
+    
+    if records:
+        output += "<table border='1' cellpadding='5'><tr>"
+        for key in records[0].keys():
+            output += f"<th>{key}</th>"
+        output += "</tr>"
+        
+        for record in records:
+            output += "<tr>"
+            for value in record.values():
+                output += f"<td>{value}</td>"
+            output += "</tr>"
+        output += "</table>"
+    else:
+        output += "<p style='color:red;'>⚠️ No records found in admin_action table!</p>"
+    
+    # Check claim_request table
+    cursor.execute("SELECT claim_id, status FROM claim_request")
+    claims = cursor.fetchall()
+    
+    output += "<h2>Claim Status:</h2><ul>"
+    for claim in claims:
+        output += f"<li>Claim #{claim['claim_id']}: <strong>{claim['status']}</strong></li>"
+    output += "</ul>"
+    
+    cursor.close()
+    conn.close()
+    
+    return output
+
+
+# ===== CHECK IF TABLE EXISTS, CREATE IF NOT =====
+def init_admin_action_table():
+    """Call this during app initialization"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # Check if table exists
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'admin_action'
+            )
+        """)
+        
+        exists = cursor.fetchone()[0]
+        
+        if not exists:
+            print("⚠️ admin_action table doesn't exist. Creating it...")
+            
+            cursor.execute("""
+                CREATE TABLE admin_action (
+                    action_id SERIAL PRIMARY KEY,
+                    claim_id INTEGER REFERENCES claim_request(claim_id),
+                    admin_id INTEGER REFERENCES "user"(user_id),
+                    action_type VARCHAR(20) NOT NULL,
+                    remarks TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            conn.commit()
+            print("✓ admin_action table created successfully!")
+        else:
+            print("✓ admin_action table already exists")
+        
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        print(f"✗ Error checking/creating admin_action table: {str(e)}")
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/get-security-answers/<int:claim_id>')
+@login_required(role='admin')
+def get_security_answers(claim_id):
+    conn = get_db()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    try:
+        # Get item_id from claim
+        cursor.execute('SELECT item_id FROM claim_request WHERE claim_id = %s', (claim_id,))
+        claim = cursor.fetchone()
+        
+        if not claim:
+            return jsonify({'success': False, 'error': 'Claim not found'}), 404
+        
+        item_id = claim['item_id']
+        
+        # Get REPORTER's security question and answer
+        cursor.execute('''
+            SELECT question_text, answer 
+            FROM security_question 
+            WHERE item_id = %s AND claim_id IS NULL
+            LIMIT 1
+        ''', (item_id,))
+        reporter_security = cursor.fetchone()
+        
+        # Get CLAIMANT's answer
+        cursor.execute('''
+            SELECT question_text, answer 
+            FROM security_question 
+            WHERE claim_id = %s
+            LIMIT 1
+        ''', (claim_id,))
+        claimant_security = cursor.fetchone()
+        
+        return jsonify({
+            'success': True,
+            'reporter_question': reporter_security['question_text'] if reporter_security else 'N/A',
+            'reporter_answer': reporter_security['answer'] if reporter_security else 'N/A',
+            'claimant_answer': claimant_security['answer'] if claimant_security else 'N/A'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+if __name__ == '__main__':
+    init_db()
+    app.run(debug=True)
