@@ -560,6 +560,129 @@ def admin_claims():
         conn.close()
         flash(f'Error loading claims: {str(e)}', 'danger')
         return render_template('admin_claims.html', claims=[])
+    
+@app.route('/admin/handover')
+@login_required(role='admin')
+def admin_handover():
+    """Admin interface to manage item handovers"""
+    return render_template('admin_handover.html')
+
+@app.route('/admin/verify_handover', methods=['POST'])
+@login_required(role='admin')
+def verify_handover():
+    """Admin verifies code when finder hands over item"""
+    data = request.json
+    pickup_code = data.get('pickup_code')
+    
+    conn = None
+    cursor = None
+    
+    try:
+        conn = get_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cursor.execute("""
+            SELECT claim_id, item_id 
+            FROM claim_request 
+            WHERE pickup_code = %s AND status = 'approved'
+        """, (pickup_code,))
+        
+        claim = cursor.fetchone()
+        
+        if not claim:
+            return jsonify({'error': 'Invalid pickup code or claim not approved'}), 404
+        
+        # Mark item as handed to admin
+        cursor.execute("""
+            UPDATE claim_request 
+            SET item_handed_to_admin = TRUE,
+                handed_to_admin_at = %s
+            WHERE claim_id = %s
+        """, (datetime.now(), claim['claim_id']))
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Item successfully received from finder!',
+            'claim_id': claim['claim_id']
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in verify_handover: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+@app.route('/admin/verify_collection', methods=['POST'])
+@login_required(role='admin')
+def verify_collection():
+    """Admin verifies code when claimer collects item"""
+    data = request.json
+    pickup_code = data.get('pickup_code')
+    
+    conn = None
+    cursor = None
+    
+    try:
+        conn = get_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cursor.execute("""
+            SELECT claim_id, item_id, item_handed_to_admin
+            FROM claim_request 
+            WHERE pickup_code = %s AND status = 'approved'
+        """, (pickup_code,))
+        
+        claim = cursor.fetchone()
+        
+        if not claim:
+            return jsonify({'error': 'Invalid pickup code or claim not approved'}), 404
+        
+        # Check if item_handed_to_admin is True (handle NULL as False)
+        if not claim.get('item_handed_to_admin'):
+            return jsonify({'error': 'Item not yet received from finder. Please complete Step 1 first.'}), 400
+        
+        # Mark item as collected
+        cursor.execute("""
+            UPDATE claim_request 
+            SET item_collected_by_claimer = TRUE,
+                collected_at = %s
+            WHERE claim_id = %s
+        """, (datetime.now(), claim['claim_id']))
+        
+        # Mark item as resolved
+        cursor.execute("""
+            UPDATE item 
+            SET status = 'resolved'
+            WHERE item_id = %s
+        """, (claim['item_id'],))  # Added missing comma for single-item tuple
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Item successfully handed over to claimer! Case closed.',
+            'claim_id': claim['claim_id']
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in verify_collection: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+       
 @app.route('/admin/claims/<int:claim_id>/review', methods=['GET', 'POST'])
 @login_required(role='admin')
 def review_claim(claim_id):
