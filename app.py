@@ -2,18 +2,35 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
+from flask_mail import Mail, Message
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta
 import os
+import string  # ADD THIS
+import random  # ADD THIS
+import time  
 
 # Create Flask app FIRST
 app = Flask(__name__)
 app.secret_key = 'abd04a92802df48bf455d9eb4c6e3186325671c5fd9c59c1df56e31e8eb98088'
 
-# THEN configure it
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)  # Session lasts 24 hours
-app.config['SESSION_COOKIE_SECURE'] = False  # Set to True if using HTTPS
+# Configure Mail BEFORE initializing
+# Email Configuration for Mailtrap
+# Email Configuration for Gmail
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USERNAME'] = 'sahanac2024@gmail.com'  # Your Gmail
+app.config['MAIL_PASSWORD'] = 'ovvr ugdq uiqi ucrt'  # Paste the app password
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USE_SSL'] = False
+app.config['MAIL_DEFAULT_SENDER'] = 'sahanac2024@gmail.com'
+# THEN initialize Mail
+mail = Mail(app)
+
+# Rest of configuration
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
+app.config['SESSION_COOKIE_SECURE'] = False
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
@@ -25,7 +42,6 @@ MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
-# Create upload directory if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # PostgreSQL Database Configuration
@@ -45,6 +61,109 @@ def get_db():
     """Create database connection"""
     conn = psycopg2.connect(**DB_CONFIG)
     return conn
+
+# Your existing init_db() function stays the same...
+# [Keep all your existing functions]
+
+# Generate unique 8-character pickup code
+def generate_pickup_code():
+    """Generate a unique 8-character alphanumeric code"""
+    characters = string.ascii_uppercase + string.digits
+    code = ''.join(random.choices(characters, k=8))
+    return code
+
+# Send email to found person (reporter)
+def send_email_to_finder(finder_email, finder_name, item_name, pickup_code):
+    """Send email to the person who found the item"""
+    try:
+        subject = "Action Required: Item Claimed - Handover to Admin"
+        
+        body = f"""
+Dear {finder_name},
+
+Good news! The item you reported as FOUND has been successfully claimed and verified by our admin team.
+
+Item Details: {item_name}
+
+NEXT STEPS:
+1. Please bring the item to the Admin Office
+2. Hand over the item to the administrator
+3. Provide this PICKUP CODE to the admin: {pickup_code}
+
+IMPORTANT:
+- Keep this code confidential
+- The admin will verify this code before accepting the item
+- Once handed over, you will receive a confirmation
+
+Admin Office Hours: Monday-Friday, 9 AM - 5 PM
+Location: [Your Admin Office Location]
+
+Thank you for your honesty and cooperation!
+
+Best regards,
+Lost & Found Management Team
+
+Pickup Code: {pickup_code}
+"""
+        
+        msg = Message(
+            subject=subject,
+            recipients=[finder_email],
+            body=body,
+            sender=app.config['MAIL_DEFAULT_SENDER']
+        )
+        mail.send(msg)
+        print(f"✓ Email sent to finder: {finder_email}")
+        return True
+    except Exception as e:
+        print(f"✗ Failed to send email to finder: {str(e)}")
+        return False
+
+# Send email to lost person (claimant)
+def send_email_to_claimer(claimer_email, claimer_name, item_name, pickup_code):
+    """Send email to the person who claimed the item"""
+    try:
+        subject = "Great News! Your Claim Approved - Collect Your Item"
+        
+        body = f"""
+Dear {claimer_name},
+
+Excellent news! Your claim has been APPROVED by our admin team.
+
+Item Details: {item_name}
+
+NEXT STEPS TO COLLECT YOUR ITEM:
+1. Visit the Admin Office during office hours
+2. Provide this PICKUP CODE to the administrator: {pickup_code}
+3. Bring a valid ID for verification
+4. Collect your item
+
+IMPORTANT:
+- Keep this code confidential and secure
+- You must provide this exact code to collect the item
+- The item will be held for 7 days from today
+
+Admin Office Hours: Monday-Friday, 9 AM - 5 PM
+Location: [Your Admin Office Location]
+
+Best regards,
+Lost & Found Management Team
+
+Pickup Code: {pickup_code}
+"""
+        
+        msg = Message(
+            subject=subject,
+            recipients=[claimer_email],
+            body=body,
+            sender=app.config['MAIL_DEFAULT_SENDER']
+        )
+        mail.send(msg)
+        print(f"✓ Email sent to claimer: {claimer_email}")
+        return True
+    except Exception as e:
+        print(f"✗ Failed to send email to claimer: {str(e)}")
+        return False
 
 def init_db():
     """Initialize database tables"""
@@ -441,18 +560,11 @@ def admin_claims():
         conn.close()
         flash(f'Error loading claims: {str(e)}', 'danger')
         return render_template('admin_claims.html', claims=[])
-
 @app.route('/admin/claims/<int:claim_id>/review', methods=['GET', 'POST'])
 @login_required(role='admin')
 def review_claim(claim_id):
     conn = get_db()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    
-    # ===== ADD THIS DEBUG BLOCK =====
-    print(f"\n{'='*60}")
-    print(f"DEBUG: Reviewing claim_id = {claim_id}")
-    print(f"{'='*60}\n")
-    # ================================
     
     if request.method == 'POST':
         action_type = request.form.get('action_type')
@@ -476,13 +588,86 @@ def review_claim(claim_id):
             
             # Update item status if approved
             if action_type == 'approve':
-                cursor.execute('SELECT item_id FROM claim_request WHERE claim_id = %s', (claim_id,))
-                item_result = cursor.fetchone()
-                if item_result:
-                    cursor.execute('UPDATE item SET status = %s WHERE item_id = %s', ('resolved', item_result['item_id']))
-            
-            conn.commit()
-            flash(f'Claim has been {new_status} successfully!', 'success')
+                # Generate pickup code
+                pickup_code = generate_pickup_code()
+                
+                # Ensure code is unique
+                while True:
+                    cursor.execute("SELECT claim_id FROM claim_request WHERE pickup_code = %s", (pickup_code,))
+                    if not cursor.fetchone():
+                        break
+                    pickup_code = generate_pickup_code()
+                
+                # Update claim with pickup code
+                cursor.execute(
+                    'UPDATE claim_request SET pickup_code = %s WHERE claim_id = %s',
+                    (pickup_code, claim_id)
+                )
+                
+                # Get all necessary info for emails
+                cursor.execute('''
+                    SELECT 
+                        c.item_id,
+                        i.title as item_name,
+                        r.user_id as reporter_id,
+                        c.user_id as claimant_id
+                    FROM claim_request c
+                    JOIN item i ON c.item_id = i.item_id
+                    JOIN report r ON r.item_id = i.item_id
+                    WHERE c.claim_id = %s
+                ''', (claim_id,))
+                
+                claim_info = cursor.fetchone()
+                
+                if claim_info:
+                    # Get reporter (finder) details
+                    cursor.execute(
+                        'SELECT name, email FROM "user" WHERE user_id = %s',
+                        (claim_info['reporter_id'],)
+                    )
+                    finder = cursor.fetchone()
+                    
+                    # Get claimant details
+                    cursor.execute(
+                        'SELECT name, email FROM "user" WHERE user_id = %s',
+                        (claim_info['claimant_id'],)
+                    )
+                    claimer = cursor.fetchone()
+                    
+                    # Update item status
+                    cursor.execute(
+                        'UPDATE item SET status = %s WHERE item_id = %s',
+                        ('resolved', claim_info['item_id'])
+                    )
+                    
+                    # Commit before sending emails
+                    conn.commit()
+                    
+                    # Send emails to both parties
+                    send_email_to_finder(
+                        finder_email=finder['email'],
+                        finder_name=finder['name'],
+                        item_name=claim_info['item_name'],
+                        pickup_code=pickup_code
+                    )
+
+                    time.sleep(5)
+                    
+                    send_email_to_claimer(
+                        claimer_email=claimer['email'],
+                        claimer_name=claimer['name'],
+                        item_name=claim_info['item_name'],
+                        pickup_code=pickup_code
+                    )
+                    
+                    flash(f'Claim approved! Emails sent with pickup code: {pickup_code}', 'success')
+                else:
+                    conn.commit()
+                    flash('Claim approved but could not send emails.', 'warning')
+            else:
+                # For rejection, just commit
+                conn.commit()
+                flash(f'Claim has been {new_status} successfully!', 'success')
             
         except Exception as e:
             conn.rollback()
@@ -508,19 +693,6 @@ def review_claim(claim_id):
         ''', (claim_id,))
         
         claim = cursor.fetchone()
-        
-        # ===== ADD THIS DEBUG BLOCK =====
-        print(f"Query executed for claim_id: {claim_id}")
-        if claim:
-            print(f"✓ Found claim: #{claim['claim_id']}")
-            print(f"  Item ID: {claim['item_id']}")
-            print(f"  Item Title: {claim['title']}")
-            print(f"  Description: {claim['description'][:50]}...")
-            print(f"  User: {claim['user_name']}")
-        else:
-            print(f"✗ NO CLAIM FOUND for claim_id: {claim_id}")
-        print(f"{'='*60}\n")
-        # ================================
         
         if not claim:
             flash('Claim not found', 'danger')
@@ -899,6 +1071,27 @@ def debug_single_claim(claim_id):
         """
     else:
         return f"<h1>No claim found with ID {claim_id}</h1>"
+@app.route('/admin/test-email')
+@login_required(role='admin')
+def test_email():
+    """Test route to verify email configuration"""
+    try:
+        msg = Message(
+            subject='Test Email from Lost & Found System',
+            recipients=['sahanac2024@gmail.com'],  # Send to yourself for testing
+            body='This is a test email. If you receive this, your email configuration is working correctly!',
+            sender=app.config['MAIL_DEFAULT_SENDER']
+        )
+        mail.send(msg)
+        print("✓ Test email sent successfully!")
+        flash('Test email sent successfully! Check your inbox.', 'success')
+    except Exception as e:
+        print(f"✗ Failed to send test email: {str(e)}")
+        flash(f'Failed to send test email: {str(e)}', 'error')
+    
+    return redirect(url_for('admin_dashboard'))
+
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True)
