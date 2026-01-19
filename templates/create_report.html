@@ -70,6 +70,12 @@
             color: #666;
             font-size: 0.9rem;
         }
+        .image-safety-notice {
+    font-size: 0.875rem;
+    color: #f71919;
+    margin-top: 0.5rem;
+    line-height: 1.4;
+}
     </style>
 </head>
 <body>
@@ -147,6 +153,7 @@
                         <label for="item_image" class="file-input-label" id="fileLabel">
                             <span id="fileLabelText">📷 Click to upload image (JPG, PNG, or GIF - Max 5MB)</span>
                         </label>
+                        <p class="image-safety-notice">Don't upload photos that reveal sensitive details about the item. This is for the safety of ownership of the item.</p>
                         <input type="file" name="item_image" id="item_image" 
                                accept="image/jpeg,image/png,image/gif">
                     </div>
