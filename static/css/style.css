@@ -4,16 +4,16 @@
 
 /* === CSS Variables === */
 :root {
-    --primary: #6366f1;
-    --primary-dark: #4f46e5;
-    --primary-light: #818cf8;
-    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --admin-primary: #8b5cf6;
-    --admin-gradient: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
+    --primary: #63e0f130;
+    --primary-dark: #146a50;
+    --primary-light: #81f8de;
+    --primary-gradient: linear-gradient(135deg, #135a4a 0%, #764ba2 100%);
+    --admin-primary: #447767;
+    --admin-gradient: linear-gradient(135deg, #a78bfa 0%, #447767 100%);
     --success: #10b981;
     --danger: #ef4444;
     --warning: #f59e0b;
-    --info: #3b82f6;
+    --info: #099274;
     --text-primary: #1f2937;
     --text-secondary: #6b7280;
     --text-muted: #9ca3af;
@@ -94,6 +94,9 @@ a {
     font-weight: 700;
     color: var(--text-primary);
     letter-spacing: -0.5px;
+    margin-right: 3rem;
+    margin-left: 0;
+    padding-left: 0;
 }
 
 .navbar-admin .nav-brand {
@@ -118,15 +121,23 @@ a {
     color: rgba(255, 255, 255, 0.9);
 }
 
-.nav-menu a:hover,
-.nav-menu a.active {
+.nav-menu a:hover {
     background: var(--bg-tertiary);
-    color: var(--primary);
+    color: #374151;
 }
 
-.navbar-admin .nav-menu a:hover,
-.navbar-admin .nav-menu a.active {
+.nav-menu a.active {
+    background: #6366f1;
+    color: #ffffff;
+}
+
+.navbar-admin .nav-menu a:hover {
     background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+.navbar-admin .nav-menu a.active {
+    background: #6366f1;
     color: #ffffff;
 }
 
@@ -247,7 +258,7 @@ a {
 }
 
 .role-card.user:hover {
-    border-color: var(--primary-light);
+    border-color: var(--admin-primary);
     box-shadow: 0 20px 40px rgba(99, 102, 241, 0.15);
 }
 
@@ -347,12 +358,12 @@ a {
 .btn-admin {
     background: var(--admin-gradient);
     color: white;
-    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    box-shadow: 0 4px 12px rgba(1, 99, 94, 0.764);
     width: 100%;
 }
 
 .btn-admin:hover {
-    box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4);
+    box-shadow: 0 6px 16px rgba(1, 99, 94, 0.4);
     transform: translateY(-2px);
 }
 
@@ -421,7 +432,7 @@ a {
 
 .alert-info {
     background: #dbeafe;
-    color: #1e40af;
+    color: #427269;
     border-left: 4px solid var(--info);
 }
 
@@ -1203,7 +1214,7 @@ a {
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #135a4a 0%, #764ba2 100%);
     min-height: 100vh;
     color: #333;
 }
@@ -1216,19 +1227,23 @@ body {
 }
 
 .nav-container {
-    max-width: 1200px;
-    margin: 0 auto;
+    max-width: 100%;
+    width: 100%;
+    margin: 0;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 2rem;
+    padding: 0 2rem 0 0.75rem;
 }
 
 .nav-brand {
     font-size: 1.5rem;
     font-weight: bold;
-    color: #667eea;
+    color: #135a4a;
     text-decoration: none;
+    margin-right: 3rem;
+    margin-left: 0;
+    padding-left: 0;
 }
 
 .nav-menu {
@@ -1243,9 +1258,13 @@ body {
     transition: color 0.3s;
 }
 
-.nav-link:hover,
+.nav-link:hover {
+    color: #374151;
+}
+
 .nav-link.active {
-    color: #667eea;
+    background: #6366f1;
+    color: #ffffff;
 }
 
 /* Container */
@@ -1299,7 +1318,7 @@ body {
 .stat-number {
     font-size: 2.5rem;
     font-weight: bold;
-    color: #667eea;
+    color: #135a4a;
 }
 
 /* Section */
@@ -1381,9 +1400,26 @@ body {
     color: #388e3c;
 }
 
+.badge-approve {
+    background: #e8f5e9;
+    color: #388e3c;
+}
+
 .badge-rejected {
     background: #ffebee;
     color: #d32f2f;
+}
+
+.badge-reject {
+    background: #ffebee;
+    color: #d32f2f;
+}
+
+.remarks {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Empty State */
@@ -1408,7 +1444,7 @@ body {
 }
 
 .action-card h3 {
-    color: #667eea;
+    color: #135a4a;
     margin-bottom: 0.5rem;
 }
 
@@ -1432,6 +1468,7 @@ body {
 .btn-primary {
     background: #667eea;
     color: white;
+
 }
 
 .btn-primary:hover {
@@ -1481,7 +1518,7 @@ body {
 
 .form-control:focus {
     outline: none;
-    border-color: #667eea;
+    border-color: #135a4a;
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
@@ -1564,7 +1601,7 @@ select.form-control {
 }
 
 .role-card h2 {
-    color: #667eea;
+    color: #135a4a;
     margin-bottom: 1rem;
 }
 
@@ -1593,7 +1630,7 @@ select.form-control {
 
 .auth-box h2 {
     text-align: center;
-    color: #667eea;
+    color: #135a4a;
     margin-bottom: 2rem;
 }
 
@@ -1603,7 +1640,7 @@ select.form-control {
 }
 
 .auth-links a {
-    color: #667eea;
+    color: #135a4a;
     text-decoration: none;
 }
 
@@ -1636,7 +1673,7 @@ select.form-control {
 }
 
 .security-box.reporter {
-    border-left: 4px solid #3498db;
+    border-left: 4px solid #34dbbc;
 }
 
 .security-box.claimant {
